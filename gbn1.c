@@ -153,10 +153,10 @@ int gbn_connect(int sockfd, const struct sockaddr *server, socklen_t socklen){
     				printf("Received a packet\n");
     				printf("type: %d\tseqnum:%dchecksum(received)%dchecksum(calculated)%d\n", SYN_ACK_packet->type, SYN_ACK_packet->seqnum, SYN_ACK_packet->checksum, checksum(SYN_ACK_packet));
 
-    				if(SYN_ACK->type == SYNACK && SYN_ACK->checksum == checksum(SYN_ACK)) {
+    				if(SYN_ACK_packet->type == SYNACK && SYN_ACK_packet->checksum == checksum(SYN_ACK_packet)) {
     					printf("SUCCESS: SYN_ACK Received. Connection Established\n");
 
-    					s.state = ESTABLISHED;
+    						s.state = ESTABLISHED;
 							s.address = *server;
 							s.sck_len = socklen;
 							s.seqnum = SYN_ACK_packet ->seqnum;
