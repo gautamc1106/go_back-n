@@ -54,33 +54,84 @@ ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
 ssize_t gbn_recv(int sockfd, void *buf, size_t len, int flags){
 
 	/* TODO: Your code here. */
-	gnhdr *data = malloc(sizeof(*data));
+
+	//make space for packet
+	gbnhdr *data = malloc(sizeof(*data));
 	memset(data->data, '\0', sizeof(data->data));
+	struct sockaddr client;
+	socklen_t lenClient = sizeof(client);
 
+	//make the ACK packet
+	gbnhdr *ACK = malloc(sizeof(*ACK));
+	ACK->type = DATAACK;
+	memset(ACK->data, '\0', sizeof(ACK->data));
 
+	bool newData = false;
+	size_t lenData = 0
 
-
-	//make ack packet
-	//read until specified amount of data or connection is broken
-	//if errors
-	//else process the data
-	//free data
-
-
-	//recvfrom() tkes in a struct sockaddr*
-
-	//returns the # of bytes received or -1 on error or 0 if remote side closes connection
-
-
-	return(-1);
+	//read data while checking for errors
+	while (!newData && s.state == ESTABLISHED) {
+		if (recvfrom(sockfd, data, sizeof(*data), 0, &client, &clientlen) == -1) {
+			if (errno != EINTR) {
+				s.state = CLOSED;
+			}
+		} else {
+			//data packet received
+			printf("Got data\n");
+			printf("%d -- %d -- %d -- %d\n", data->type, data->seqnum, data->checksum, p_checksum(data));
+			if (data->type == DATA && data->checksum == p_checksum(data)) {
+				if (data->seqnum == s.seqnum) {
+					printf("Data packet has the correct sequence number\n");
+					memcpy(&lenData, data->data, 2);
+					memcpy(buf, data->data+2, lenData);
+					s.seqnum = data->seqnum + (uint8_t)1;
+					newData = true;
+					ACK->seqnum = s.seqnum;
+					ACK->checksum = p_checksum(ACK);
+					if (maybe_sendto(sockfd, ACK, sizeof(*ACK), 0, &s.addr, s.socklen)==-1) {
+						printf("Cannot get data \n", strerror(errno));
+						s.state = CLOSED;
+						break;
+					}
+					printf("Sent ACK\n", ACK->seqnum);
+				} else {
+					printf("Data packet has the wrong sequence number\n");
+					ACK->seqnum = s.seqnum;
+					ACK->checksum = p_checksum(ACK);
+					if (maybe_sendto(sockfd, ACK, sizeof(*ACK), 0, &s.addr, s.socklen)==-1) {
+						printf("Cannot get data \n", strerror(errno));
+						s.state = CLOSED;
+						break;
+					}
+					printf("Duplicate ACK sent \n", ACK->seqnum);
+				}
+			}
+		} else if (data->type == FIN && data->checksum == p_checksum(data)) {
+			printf ("FIN packet\n");
+			s.seqnum = data->seqnum + (uint8_t)1;
+			s.state = FIN_RCVD;
+		}
+	}
+	free(data);
+	free(ACK);
+	if (s.state == ESTABLISHED) {
+		return lenData;
+	} else if (s.state != CLOSED) {
+		return 0;
+	} else {
+		return -1;
+	}
 }
 
 int gbn_close(int sockfd){
 
 	/* TODO: Your code here. */
-	close(sockfd);
+	if (s.state != FIN_RCVD) {
+		s.state = FIN_SENT;
+	}
 
-	return(-1);
+
+	close(sockfd);
 }
 
 int gbn_connect(int sockfd, const struct sockaddr *server, socklen_t socklen){
@@ -153,10 +204,10 @@ int gbn_connect(int sockfd, const struct sockaddr *server, socklen_t socklen){
     				printf("Received a packet\n");
     				printf("type: %d\tseqnum:%dchecksum(received)%dchecksum(calculated)%d\n", SYN_ACK_packet->type, SYN_ACK_packet->seqnum, SYN_ACK_packet->checksum, checksum(SYN_ACK_packet));
 
-    				if(SYN_ACK_packet->type == SYNACK && SYN_ACK_packet->checksum == checksum(SYN_ACK_packet)) {
+    				if(SYN_ACK->type == SYNACK && SYN_ACK->checksum == checksum(SYN_ACK)) {
     					printf("SUCCESS: SYN_ACK Received. Connection Established\n");
 
-    						s.state = ESTABLISHED;
+    					s.state = ESTABLISHED;
 							s.address = *server;
 							s.sck_len = socklen;
 							s.seqnum = SYN_ACK_packet ->seqnum;
