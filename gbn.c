@@ -38,6 +38,10 @@ void timeout(int s) {
 	timeout_indicator = true;
 }
 
+size_t min(size_t a, size_t b) {
+    return a < b ? a : b;
+}
+
 ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
 	
 	/* TODO: Your code here. */
@@ -97,7 +101,7 @@ ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
                         memcpy(DATA_packet->data + DATALEN_BYTES, buf + data_sent + data_offset, data_len);
                         data_offset += data_len;
 
-                        data_packet->checksum = checksum(data_packet);
+                        DATA_packet->checksum = p_checksum(DATA_packet);
                         if (attempts > MAX_ATTEMPTS) {
                             // If the max attempts are reached
                             printf("ERROR: Max attempts are reached.\n");
@@ -113,7 +117,7 @@ ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
                         } else {
                             // Successfully sent a DATA packet
                             printf("SUCCESS: Sent DATA packet (%d)\n", DATA_packet->seqnum);
-                            printf("type: %d\t%dseqnum: %d\tchecksum(received): %d\tchecksum(calculated): \n", DATA_packet->type, DATA_packet->seqnum, DATA_packet->checksum, checksum(DATA_packet));
+                            printf("type: %d\t%dseqnum: %d\tchecksum(received): %d\tchecksum(calculated): \n", DATA_packet->type, DATA_packet->seqnum, DATA_packet->checksum, p_checksum(DATA_packet));
 
                             if (counter == 0) {
                                 // If first packet, set time out before FIN
@@ -166,8 +170,8 @@ ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
                             len -= dataSent;
                             data_sent += dataSent;
                             attempts = 0;
-                            UNACKed_packets_counter -= ACKed_packets_num;
-                            (UNACKed_packets_counter == 0) ? alarm(0): alarm(TIMEOUT);
+                            unacked_packets_counter -= acked_packets_num;
+                            (unacked_packets_counter == 0) ? alarm(0): alarm(TIMEOUT);
 
                             if (s.window_size < MAX_WINDOW_SIZE) {
                             	//switching to fast mode
@@ -185,8 +189,9 @@ ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
                         }
                         else if(ACK_packet->type == SYNACK && ACK_packet->checksum == p_checksum(ACK_packet)) {
                             printf("SUCCESS: Received valid SYNACK packet.\n");
-                            ACKSYNACK_packet->seqnum = s.p_checksum(ACKSYNACK_packet);
-                            if (maybe_sendto(sockfd, ACKSYNACK_packet, sizeof(*ACKSYNACK_packet), 0, &s.address,
+                            ACK_SYNACK_packet->seqnum = s.seqnum;
+                            ACK_SYNACK_packet->checksum = p_checksum(ACK_SYNACK_packet);
+                            if (maybe_sendto(sockfd, ACK_SYNACK_packet, sizeof(*ACK_SYNACK_packet), 0, &s.address,
                                              s.sck_len) == -1) {
                                 // can't send for some other reason, bail
                                 printf("ERROR: Unable to send ACKSYNACK.\n");
@@ -216,7 +221,7 @@ ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
     }
     free(DATA_packet);
     free(ACK_packet);
-    free(ACKSYNACK_packet);
+    free(ACK_SYNACK_packet);
     return (s.state == ESTABLISHED) ? data_sent: -1;
 }
 
@@ -234,16 +239,145 @@ ssize_t gbn_recv(int sockfd, void *buf, size_t len, int flags){
 int gbn_close(int sockfd){
 
 	/* TODO: Your code here. */
-	close(sockfd);
+    if (s.state != FIN_RCVD) {
+        s.state = FIN_SENT;
+    }
 
-	return(-1);
+
+	struct sockaddr_in from;
+    socklen_t fromlen = sizeof(from);
+    int attempts = 0;
+
+    //FIN packet
+    gbnhdr *FIN_packet = malloc(sizeof(*FIN_packet));
+    FIN_packet->type = FIN;
+    memset(FIN_packet->data, '\0', sizeof(FIN_packet->data));
+
+    //FIN_ACK packet
+    gbnhdr *FIN_ACK_packet = malloc(sizeof(*FIN_ACK_packet));
+    FIN_ACK_packet->type = FINACK;
+    memset(FIN_ACK_packet->data, '\0', sizeof(FIN_ACK_packet->data));
+
+    //make space for receiving FIN packet
+    gbnhdr *FIN_RCV_packet = malloc(sizeof(*FIN_RCV_packet));
+    memset(FIN_RCV_packet->data, '\0', sizeof(FIN_RCV_packet->data));
+
+    //make space for receiving FIN_ACK packet
+    gbnhdr *FIN_ACK_RCV_packet = malloc(sizeof(*FIN_ACK_RCV_packet));
+    memset(FIN_RCV_packet->data, '\0', sizeof(FIN_RCV_packet->data));
+
+
+    while(s.state != CLOSED ){
+        switch (s.state){
+            //receive finack, update state established
+            case FIN_SENT:
+
+            	if(attempts >= MAX_ATTEMPTS){
+            		 printf("ERROR: max tries, change state to close. Time out: %d\n", TIMEOUT);
+                    errno = 0;
+                    s.state = CLOSED;
+                    break;
+                }
+                else if(sendto(sockfd, FIN_packet, sizeof(*FIN_packet), 0, &s.address, s.sck_len) == -1){
+                    printf("ERROR: send Fin fail, max try: %d !! %s\n", attempts++, strerror(errno));
+                    s.state = CLOSED;
+                    break;
+                }
+
+                printf("SUCCESS: Sent FIN\n");
+
+                if(recvfrom(sockfd, FIN_ACK_RCV_packet, sizeof(*FIN_ACK_RCV_packet), 0, &from, &fromlen) == -1){
+                    //timeout try one more time
+                    if(errno != EINTR){
+                        s.state = CLOSED;
+                        printf("ERROR : Not time out error!\n");
+                        break;
+                    }
+                    else{
+                        printf("ERROR: Timeout\n");
+                        break;
+                    }
+                }
+                else{
+                    printf("SUCCESS: Recieved Something.\n");
+                    alarm(0);
+                    if(FIN_ACK_RCV_packet->type == FINACK && FIN_ACK_RCV_packet->checksum == p_checksum(FIN_ACK_RCV_packet)){
+                    	printf("SUCCESS: Recevied FIN ACK packet!");
+                        s.fin = true;
+                        if(s.fin_ack){
+                        	printf("SUCCESS: Process over. Connection closed.\n");
+                        	s.state = CLOSED;
+                        }
+                        else{
+                        s.state = FIN_WAIT;
+                    }
+                }
+                    else if (FIN_ACK_RCV_packet->type == FIN && FIN_ACK_RCV_packet->checksum == p_checksum(FIN_ACK_RCV_packet)) {
+                        printf("It's a FIN!\n");
+                        s.state = FIN_RCVD;
+                }
+            }
+                break;
+
+                case FIN_RCVD:
+                // Received a FIN from other side
+                if(sendto(sockfd, FIN_ACK_packet, sizeof(*FIN_ACK_packet), 0, &s.address, s.sck_len) == -1) {
+                    // can't send for some reason, bail
+                    printf("Couldn't send FINACK! %s\n", strerror(errno));
+                } else {
+                    printf("Sent FINACK!\n");
+                }
+                // only close the connection if this side has also done the FIN-FINACK procedure
+                // otherwise send a FIN and wait for FINACK before closing
+                s.fin_ack = true;
+                if (s.fin) {
+                    s.state = CLOSED;
+                } else {
+                    s.state = FIN_SENT;
+                }
+                break;
+
+            case FIN_WAIT:
+                if (recvfrom(sockfd, FIN_RCV_packet, sizeof(*FIN_RCV_packet), 0, &from, &fromlen) == -1) {
+                    // didn't receive because of timeout or some other issue
+                    // if timeout, try again
+                    if(errno != EINTR) {
+                        // some problem other than timeout
+                        s.state = CLOSED;
+                        break;
+                    }
+                } else {
+                    printf("Got something...\n");
+                    // got a FIN
+                    if (FIN_RCV_packet->type == FIN && FIN_RCV_packet->checksum == p_checksum(FIN_RCV_packet)) {
+                        printf("It's a FIN!\n");
+                        s.seqnum = FIN_RCV_packet->seqnum + (uint8_t)1;
+                        s.state = FIN_RCVD;
+                    }
+                }
+                break;
+            default:
+                break;
+
+        }
+    }
+
+    free(FIN_packet);
+    free(FIN_ACK_packet);
+    free(FIN_RCV_packet);
+    free(FIN_ACK_RCV_packet);
+
+    return(s.state == CLOSED ? close(sockfd) : -1);
+
+
 }
+
 
 int gbn_connect(int sockfd, const struct sockaddr *server, socklen_t socklen){
 
 	/* TODO: Your code here. */
 	/*Setting packet state to SYN Sent*/
-	printf("Entering Function: connect()\n")
+	printf("Entering Function: connect()\n");
 	s.state = SYN_SENT;
 	printf("SYN packet sent, trying to setup connection\n");
 
