@@ -232,8 +232,77 @@ ssize_t gbn_send(int sockfd, const void *buf, size_t len, int flags){
 ssize_t gbn_recv(int sockfd, void *buf, size_t len, int flags){
 
 	/* TODO: Your code here. */
+	printf("Entering function: recv()\not");
+	struct sockaddr client;
+    socklen_t clientlen = sizeof(client);
 
-	return(-1);
+	gbnhdr *data = malloc(sizeof(*data));
+	memset(data->data, '\0', sizeof(data->data));
+
+	//make the ACK packet
+	gbnhdr *ACK = malloc(sizeof(*ACK));
+	ACK->type = DATAACK;
+	memset(ACK->data, '\0', sizeof(ACK->data));
+
+	bool newData = false;
+	size_t lenData = 0;
+
+	//read data while checking for errors
+	while (!newData && s.state == ESTABLISHED) {
+		if (recvfrom(sockfd, data, sizeof(*data), 0, &client, &clientlen) == -1) {
+			if (errno != EINTR) {
+				s.state = CLOSED;
+			}
+		} 
+		else {
+			//data packet received
+			printf("Got something\n");
+			printf("%d -- %d -- %d -- %d\n", data->type, data->seqnum, data->checksum, p_checksum(data));
+			if (data->type == DATA && data->checksum == p_checksum(data)) {
+				if (data->seqnum == s.seqnum) {
+					printf("Data packet has the correct sequence number\n");
+					memcpy(&lenData, data->data, 2);
+					memcpy(buf, data->data+2, lenData);
+					s.seqnum = data->seqnum + (uint8_t)1;
+					newData = true;
+					ACK->seqnum = s.seqnum;
+					ACK->checksum = p_checksum(ACK);
+					if (maybe_sendto(sockfd, ACK, sizeof(*ACK), 0, &s.address, s.sck_len)==-1) {
+						printf("Cannot get data \n", strerror(errno));
+						s.state = CLOSED;
+						break;
+					}
+					printf("Sent ACK\n", ACK->seqnum);
+				} 
+				else {
+					printf("Data packet has the wrong sequence number\n");
+					ACK->seqnum = s.seqnum;
+					ACK->checksum = p_checksum(ACK);
+					if (maybe_sendto(sockfd, ACK, sizeof(*ACK), 0, &s.address, s.sck_len)==-1) {
+						printf("Cannot get data \n", strerror(errno));
+						s.state = CLOSED;
+						break;
+					}
+					printf("Duplicate ACK sent \n", ACK->seqnum);
+				}
+			}
+			else if (data->type == FIN && data->checksum == p_checksum(data)) {
+					printf ("FIN packet\n");
+					s.seqnum = data->seqnum + (uint8_t)1;
+					s.state = FIN_RCVD;
+				}
+		} 	
+	}
+
+	free(data);
+	free(ACK);
+	if (s.state == ESTABLISHED) {
+		return lenData;
+	} else if (s.state != CLOSED) {
+		return 0;
+	} else {
+		return -1;
+	}
 }
 
 int gbn_close(int sockfd){
@@ -379,7 +448,7 @@ int gbn_connect(int sockfd, const struct sockaddr *server, socklen_t socklen){
 	/*Setting packet state to SYN Sent*/
 	printf("Entering Function: connect()\n");
 	s.state = SYN_SENT;
-	printf("SYN packet sent, trying to setup connection\n");
+	printf("Sending SYN packet, trying to setup connection\n");
 
 	//Initializing SYN, SYN_ACK and ACK packets for 3 way handshake
 
@@ -394,6 +463,7 @@ int gbn_connect(int sockfd, const struct sockaddr *server, socklen_t socklen){
 	// Initializing  SYN_ACK packet
 	gbnhdr *SYN_ACK_packet = malloc(sizeof(*SYN_ACK_packet));
 	memset(SYN_ACK_packet->data, '\0', sizeof(SYN_ACK_packet->data));
+	
 	struct sockaddr from;
 	socklen_t from_len = sizeof(from);
 
@@ -420,11 +490,13 @@ int gbn_connect(int sockfd, const struct sockaddr *server, socklen_t socklen){
     				break;
     			}
 
-    			printf("SUCCESS: SYN_packet Sent\n");
+    			printf("SUCCESS: SYN_packet Sent..\n");
 
     			//Now starting timer
+    			printf("Reached now\n");
     			alarm(TIMEOUT);
     			attempts++;
+    			printf("Reached here");
 
     			//Waiting to receive SYN_ACK
     			if(recvfrom(sockfd, SYN_ACK_packet, sizeof(*SYN_ACK_packet), 0, &from, &from_len) == -1 ){
@@ -539,7 +611,7 @@ int gbn_accept(int sockfd, struct sockaddr *client, socklen_t *socklen){
     while (s.state != ESTABLISHED) {
         switch (s.state) {
             case CLOSED:
-				printf("STATE: CLOSED\n");
+				printf("STATE: CLOSED. Waiting for connection.\n");
 
                 // Check if receiving a valid SYN packet
                 if (recvfrom(sockfd, SYN_packet, sizeof(*SYN_packet), 0, client, socklen) == -1 ) {
@@ -548,7 +620,7 @@ int gbn_accept(int sockfd, struct sockaddr *client, socklen_t *socklen){
 					break;
 				} 
 				else {                
-					printf("SUCCESS: Received SYN\n");
+					printf("SUCCESS: Received Something\n");
 
                     if (SYN_packet->type == SYN && SYN_packet->checksum == p_checksum(SYN_packet)) {
                         // If a valid SYN is received
