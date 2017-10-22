@@ -49,12 +49,13 @@ int main(int argc, char *argv[]){
 
 	/*----- Reading from the file and sending it through the socket -----*/
 	while ((numRead = fread(buf, 1, DATALEN * N, inputFile)) > 0){
+		printf("Now sending file\n");
 		if (gbn_send(sockfd, buf, numRead, 0) == -1){
 			perror("gbn_send");
 			exit(-1);
 		}
 	}
-
+	printf("now closing\n");
 	/*----- Closing the socket -----*/
 	if (gbn_close(sockfd) == -1){
 		perror("gbn_close");
